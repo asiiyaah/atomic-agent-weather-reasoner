@@ -25,6 +25,7 @@ def get_weather(city: str) -> dict:   #input is city(string) , o/p is a dict
             "temperature":f"{data['main']['temp']}°C",
             "description":data['weather'][0]['description'],
             "humidity":f"{data['main']['humidity']}%",
+            "rain": f"{data.get('rain', {}).get('1h', 0)}mm",
             "wind_speed": f"{data['wind']['speed']} m/s"
         }  #convert to python dict
     except Exception as e:
