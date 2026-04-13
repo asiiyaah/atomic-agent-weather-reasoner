@@ -32,12 +32,30 @@ tools = [
     }
 ]
 
+# --- HELPER: Safely extract city from tool call args ---
+def extract_city(args):
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except json.JSONDecodeError:
+            return None
+    if "city" in args:
+        return args["city"]
+    if "parameters" in args and isinstance(args["parameters"], dict):
+        return args["parameters"].get("city")
+    return None
+
 # --- UI ---
 st.set_page_config(page_title="AI Weather Planner", page_icon="⛅")
 st.title("🤖 Agentic Weather Planner ⛅")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
+
+# last_weather_context stores the most recent weather data fetched
+# so follow-up questions can reference it without re-fetching
+if "last_weather_context" not in st.session_state:
+    st.session_state.last_weather_context = None
 
 # Show chat history
 for msg in st.session_state.messages:
@@ -56,27 +74,25 @@ if prompt := st.chat_input("Ask about weather anywhere..."):
         with st.status("Agent thinking...") as status:
 
             try:
-                # --- STEP 1: FORCE TOOL CALL ---
+                # --- STEP 1: DECIDE IF TOOL CALL NEEDED ---
                 response = client.chat.completions.create(
                     model=MODEL_ID,
                     messages=[
                         {
                             "role": "system",
                             "content": (
-                                "You are a STRICT weather assistant.\n"
-                                "For ANY user query that mentions a place (even indirectly like travel, cycling, trip), "
-                                "you MUST call get_weather.\n"
-                                "You MUST NOT answer using your general knowledge on the weather of that place.\n"
-                                "You MUST ONLY use the tool response to generate your answer along with your general knowledge."
+                                "You are a weather assistant.\n"
+                                "If the user query is about weather OR mentions a place in the context of an activity "
+                                "(travel, trip, cycling, visiting, going somewhere, event planning), call get_weather for that place.\n"
+                                "If the query is a follow-up question with no new location mentioned, do NOT call the tool.\n"
+                                "You MUST NOT answer using your general knowledge about weather.\n"
+                                "Always extract just the city/place name to pass to get_weather."
                             )
                         },
-                        {"role": "user", "content": prompt}
+                        *st.session_state.messages,
                     ],
                     tools=tools,
-                    tool_choice={
-                        "type": "function",
-                        "function": {"name": "get_weather"}
-                    }
+                    tool_choice="auto"
                 )
 
                 response_message = response.choices[0].message
@@ -84,18 +100,10 @@ if prompt := st.chat_input("Ask about weather anywhere..."):
 
                 if tool_calls:
                     for tool_call in tool_calls:
-                        function_name = tool_call.function.name
-                        args = tool_call.function.arguments
+                        city = extract_city(tool_call.function.arguments)
 
-                        # If it's a string → parse it
-                        if isinstance(args, str):
-                            args = json.loads(args)
-
-                        city = args.get("city")
-
-                        # --- SAFETY CHECK ---
                         if not city or len(city) < 2:
-                            ans_text = "⚠️ Couldn't detect location properly."
+                            ans_text = "⚠️ Couldn't detect location properly. Please mention a city name."
                             break
 
                         status.update(
@@ -106,24 +114,36 @@ if prompt := st.chat_input("Ask about weather anywhere..."):
                         # --- STEP 2: CALL WEATHER API ---
                         weather_info = get_weather(city)
 
+                        # Save weather context for follow-up questions
+                        st.session_state.last_weather_context = {
+                            "city": city,
+                            "data": weather_info
+                        }
+
                         # --- STEP 3: FINAL RESPONSE ---
                         final_response = client.chat.completions.create(
                             model=MODEL_ID,
                             messages=[
                                 {
-                                    "role": "system",                      
+                                    "role": "system",
                                     "content": (
+                                        "You are a helpful weather assistant with memory of the conversation. "
                                         "Answer ONLY using the provided weather data. "
                                         "Do NOT use general seasonal knowledge. "
-                                        "Give practical advice based on current conditions."
+                                        "Give a complete and helpful weather description including temperature, feels like, "
+                                        "humidity, wind, rain, and conditions. "
+                                        "Answer exactly what the user asked. "
+                                        "Only give travel or activity advice if the user explicitly asked for it. "
+                                        "NEVER show raw JSON or data structures in your response. "
+                                        "ALWAYS present weather information in clean, natural, human-readable sentences."
                                     )
                                 },
-                                {"role": "user", "content": prompt},
+                                *st.session_state.messages,
                                 response_message,
                                 {
                                     "role": "tool",
                                     "tool_call_id": tool_call.id,
-                                    "name": function_name,
+                                    "name": tool_call.function.name,
                                     "content": json.dumps(weather_info),
                                 },
                             ],
@@ -132,7 +152,33 @@ if prompt := st.chat_input("Ask about weather anywhere..."):
                         ans_text = final_response.choices[0].message.content
 
                 else:
-                    ans_text = "⚠️ No weather data retrieved."
+                    # No new tool call — use last weather context for follow-up answers
+                    extra_context = ""
+                    if st.session_state.last_weather_context:
+                        extra_context = (
+                            f"\n\nFor reference, the last weather data fetched was for "
+                            f"{st.session_state.last_weather_context['city']}: "
+                            f"{json.dumps(st.session_state.last_weather_context['data'])}"
+                        )
+
+                    followup_response = client.chat.completions.create(
+                        model=MODEL_ID,
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": (
+                                    "You are a helpful weather assistant with memory of the conversation. "
+                                    "Use the conversation history and the last weather data provided to answer follow-up questions. "
+                                    "Do NOT fabricate new weather data. "
+                                    "NEVER show raw JSON. "
+                                    "ALWAYS respond in clean, natural, human-readable sentences."
+                                    + extra_context
+                                )
+                            },
+                            *st.session_state.messages,
+                        ],
+                    )
+                    ans_text = followup_response.content or followup_response.choices[0].message.content
 
                 status.update(label="✅ Done", state="complete")
 
