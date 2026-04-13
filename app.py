@@ -111,7 +111,7 @@ if prompt := st.chat_input("Ask about weather anywhere..."):
                             model=MODEL_ID,
                             messages=[
                                 {
-                                    "role": "system",                          # ✅ FIX: removed extra wrapping dict
+                                    "role": "system",                      
                                     "content": (
                                         "Answer ONLY using the provided weather data. "
                                         "Do NOT use general seasonal knowledge. "
