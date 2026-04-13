@@ -62,7 +62,7 @@ def get_weather(city: str) -> dict:
                 location_label += f", {country}"
             note = f"Showing weather for '{location_label}' (closest match to '{city}')"
 
-        return {
+        result= {
             "city": matched_name,
             "state": state,
             "country": country,
@@ -72,8 +72,11 @@ def get_weather(city: str) -> dict:
             "humidity": f"{data['main']['humidity']}%",
             "rain": f"{data.get('rain', {}).get('1h', 0)}mm",
             "wind_speed": f"{data['wind']['speed']} m/s",
-            **({"note": note} if note else {})
         }
+        if note:
+            result["note"] = note
+
+        return result
 
     except Exception as e:
         return {"error": f"Could not fetch weather data: {str(e)}"}

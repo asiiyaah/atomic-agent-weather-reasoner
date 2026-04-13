@@ -52,8 +52,6 @@ st.title("🤖 Agentic Weather Planner ⛅")
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# last_weather_context stores the most recent weather data fetched
-# so follow-up questions can reference it without re-fetching
 if "last_weather_context" not in st.session_state:
     st.session_state.last_weather_context = None
 
@@ -87,6 +85,9 @@ if prompt := st.chat_input("Ask about weather anywhere..."):
                                 "If the query is a follow-up question with no new location mentioned, do NOT call the tool.\n"
                                 "You MUST NOT answer using your general knowledge about weather.\n"
                                 "Always extract just the city/place name to pass to get_weather."
+                                "If the place mentioned is a neighbourhood, locality, or small area, "
+                                "try to identify the nearest major city and use that instead. "
+                                "For example, Kaloor → Kochi, Marathahalli → Bangalore."
                             )
                         },
                         *st.session_state.messages,
@@ -133,13 +134,30 @@ if prompt := st.chat_input("Ask about weather anywhere..."):
                                         "Give a complete and helpful weather description including temperature, feels like, "
                                         "humidity, wind, rain, and conditions. "
                                         "Answer exactly what the user asked. "
+                                        "If the weather data contains an error field, inform the user that the place is too small or not found, "
+                                        "and suggest they try a nearby larger city instead. "
+                                        "For example, Vyttila is a neighbourhood in Kochi — suggest searching for Kochi instead."
                                         "Only give travel or activity advice if the user explicitly asked for it. "
                                         "NEVER show raw JSON or data structures in your response. "
                                         "ALWAYS present weather information in clean, natural, human-readable sentences."
                                     )
                                 },
                                 *st.session_state.messages,
-                                response_message,
+                                {
+                                    "role": "assistant",           # clean dict, no annotations
+                                    "content": response_message.content,
+                                    "tool_calls": [
+                                        {
+                                            "id": tc.id,
+                                            "type": "function",
+                                            "function": {
+                                                "name": tc.function.name,
+                                                "arguments": tc.function.arguments
+                                            }
+                                        }
+                                        for tc in response_message.tool_calls
+                                    ] if response_message.tool_calls else []
+                                },
                                 {
                                     "role": "tool",
                                     "tool_call_id": tool_call.id,
@@ -178,7 +196,7 @@ if prompt := st.chat_input("Ask about weather anywhere..."):
                             *st.session_state.messages,
                         ],
                     )
-                    ans_text = followup_response.content or followup_response.choices[0].message.content
+                    ans_text = followup_response.choices[0].message.content
 
                 status.update(label="✅ Done", state="complete")
 
